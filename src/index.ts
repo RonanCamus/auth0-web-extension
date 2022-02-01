@@ -1,11 +1,13 @@
-import { Auth0ClientOptions } from "./global"
-import Auth0Client from "./Auth0Client"
+import 'fast-text-encoding';
 
-import "./global"
+import { Auth0ClientOptions } from './global';
+import Auth0Client from './Auth0Client';
 
-export * from "./global"
+import './global';
 
-import { handleTokenRequest } from "./handler"
+export * from './global';
+
+import { handleTokenRequest } from './handler';
 
 export default function createAuth0Client(options: Auth0ClientOptions) {
   const auth0 = new Auth0Client(options);
@@ -24,6 +26,6 @@ export {
   AuthenticationError,
   TimeoutError,
   MfaRequiredError,
-} from "./errors"
+} from './errors';
 
-export { Auth0Client, handleTokenRequest }
+export { Auth0Client, handleTokenRequest };

@@ -1,17 +1,21 @@
 # auth0-web-extension
 
+**NOTE: This library is still in pre-release and not recommended for production use yet.** I'm actively working on a
+production release, so in the meantime feel free to test this library out and raise any issues/enhacements over on the
+issue tracker.
+
 ## Installation
 
 Using [npm](https://npmjs.org)
 
 ```sh
-npm install https://github.com/pjhul/auth0-web-extension
+npm install auth0-web-extension
 ```
 
 Using [yarn](https://yarnpkg.com)
 
 ```sh
-yarn add auth0-web-extension@https://github.com/pjhul/auth0-web-extension
+yarn add auth0-web-extension
 ```
 
 ## Create the token handler
@@ -49,7 +53,7 @@ In your manifest, you will need to add a couple items.
 In your background script, create an `Auth0Client` instance
 
 ```js
-import createAuth0Client from "auth0-web-extension"
+import createAuth0Client from 'auth0-web-extension';
 
 const auth0 = createAuth0Client({
   domain: '<AUTH0_DOMAIN>',

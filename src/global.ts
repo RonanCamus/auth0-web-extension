@@ -1,5 +1,5 @@
-import { ICache } from "./cache"
-import { verifyIdToken } from "./jwt"
+import { ICache } from './cache';
+import { verifyIdToken } from './jwt';
 
 /**
  * @ignore
@@ -228,6 +228,11 @@ export interface Auth0ClientOptions extends BaseLoginOptions {
    * **Note**: Using this improperly can potentially compromise the token validation.
    */
   nowProvider?: () => Promise<number> | number;
+
+  /**
+   * Prints extra debug information
+   */
+  debug?: boolean;
 }
 
 /**
@@ -244,6 +249,46 @@ export interface AuthorizeOptions extends BaseLoginOptions {
   scope: string;
   code_challenge: string;
   code_challenge_method: string;
+}
+
+export interface RedirectLoginOptions<TAppState = any>
+  extends BaseLoginOptions {
+  /**
+   * The URL where Auth0 will redirect your browser to with
+   * the authentication result. It must be whitelisted in
+   * the "Allowed Callback URLs" field in your Auth0 Application's
+   * settings.
+   */
+  redirect_uri?: string;
+  /**
+   * Used to store state before doing the redirect
+   */
+  appState?: TAppState;
+  /**
+   * Used to add to the URL fragment before redirecting
+   */
+  fragment?: string;
+  /**
+   * Used to select the window.location method used to redirect
+   */
+  redirectMethod?: 'replace' | 'assign';
+}
+
+export interface RedirectLoginResult<TAppState = any> {
+  /**
+   * State stored when the redirect request was made
+   */
+  appStat?: TAppState;
+}
+
+export interface PopupLoginOptions extends BaseLoginOptions {}
+
+export interface PopupConfigOptions {
+  /**
+   * The number of seconds to wait for a popup response before
+   * throwing a timeout error. Defaults to 60s
+   */
+  timeoutInSeconds?: number;
 }
 
 export interface GetUserOptions {
@@ -398,17 +443,17 @@ export class User {
 }
 
 export type GetEntryFromCacheOptions = {
-  scope: string
-  audience: string
-  client_id: string
-  getDetailedEntry?: boolean
-}
+  scope: string;
+  audience: string;
+  client_id: string;
+  getDetailedEntry?: boolean;
+};
 
 export interface AuthenticationResult {
-  state: string
-  code?: string
-  error?: string
-  error_description?: string
+  state: string;
+  code?: string;
+  error?: string;
+  error_description?: string;
 }
 
 export interface TokenEndpointOptions {
@@ -416,7 +461,6 @@ export interface TokenEndpointOptions {
   client_id: string;
   grant_type: string;
   timeout?: number;
-  auth0Client: any;
   useFormData?: boolean;
   [key: string]: any;
 }
@@ -427,7 +471,7 @@ export type TokenEndpointResponse = {
   refresh_token: string;
   expires_in: number;
   scope?: string;
-}
+};
 
 export interface OAuthTokenOptions extends TokenEndpointOptions {
   code_verifier: string;
@@ -442,7 +486,7 @@ export type GetTokenSilentlyResult = TokenEndpointResponse & {
   scope: string;
   oauthTokenScope: string;
   audience: string;
-}
+};
 
 export type FetchOptions = {
   method?: string;
@@ -450,9 +494,9 @@ export type FetchOptions = {
   credentials?: 'include' | 'omit';
   body?: string;
   signal?: AbortSignal;
-}
+};
 
 export type GetTokenSilentlyVerboseResult = Omit<
   TokenEndpointResponse,
-  "refresh_token"
->
+  'refresh_token'
+>;

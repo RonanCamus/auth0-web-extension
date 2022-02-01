@@ -1,6 +1,6 @@
-import browser from "webextension-polyfill"
+import browser from 'webextension-polyfill';
 
-import Lock from "./lock"
+import Lock from './lock';
 
 import {
   bufferToBase64UrlEncoded,
@@ -9,11 +9,15 @@ import {
   encode,
   sha256,
   validateCrypto,
-} from "./utils"
+} from './utils';
 
-import { oauthToken } from "./api"
+import Messenger from './messenger';
+import TransactionManager from './transaction-manager';
+import { oauthToken } from './api';
+import { verifyIdToken } from './jwt';
+import { getUniqueScopes } from './scope';
 
-import { verifyIdToken } from "./jwt"
+import { InMemoryStorage } from './storage';
 
 import {
   InMemoryCache,
@@ -21,16 +25,14 @@ import {
   CacheKeyManifest,
   CacheManager,
   CacheKey,
-} from "./cache"
+} from './cache';
 
 import {
   DEFAULT_SCOPE,
   DEFAULT_NOW_PROVIDER,
   CACHE_LOCATION_MEMORY,
-  CHILD_PORT_NAME,
-  PARENT_PORT_NAME,
   RECOVERABLE_ERRORS,
-} from "./constants"
+} from './constants';
 
 import {
   BaseLoginOptions,
@@ -46,43 +48,54 @@ import {
   GetUserOptions,
   IdToken,
   GetIdTokenClaimsOptions,
-} from "./global"
+  RedirectLoginOptions,
+  PopupLoginOptions,
+  PopupConfigOptions,
+} from './global';
 
-import { singlePromise, retryPromise } from "./promise-utils"
-import {TimeoutError} from "./errors"
+import { AuthenticationError, TimeoutError } from './errors';
+
+import {
+  singlePromise,
+  retryPromise,
+  retryPromiseOnReject,
+  delay,
+} from './promise-utils';
 
 const lock = new Lock();
 
-const GET_TOKEN_SILENTLY_LOCK_KEY = "auth0.lock.getTokenSilently";
+const GET_TOKEN_SILENTLY_LOCK_KEY = 'auth0.lock.getTokenSilently';
 
 /**
  * Auth0 SDK for Background Scripts in a Web Extension
  */
 export default class Auth0Client {
+  private transactionManager: TransactionManager;
+  private messenger: Messenger;
   private cacheManager: CacheManager;
-  private customOptions: BaseLoginOptions
-  private domainUrl: string
-  private tokenIssuer: string
-  private defaultScope: string
-  private scope: string | undefined
-  private nowProvider: () => number | Promise<number>
+  private customOptions: BaseLoginOptions;
+  private domainUrl: string;
+  private tokenIssuer: string;
+  private defaultScope: string;
+  private scope: string | undefined;
+  private nowProvider: () => number | Promise<number>;
 
-  cacheLocation: CacheLocation
+  cacheLocation: CacheLocation;
 
   constructor(private options: Auth0ClientOptions) {
     validateCrypto();
 
     // TODO: find a way to validate we are running in a background script
 
-    if(options.cache && options.cacheLocation) {
+    if (options.cache && options.cacheLocation) {
       console.warn(
-        "Both `cache` and `cacheLocation` options have been specified in the Auth0Client configuration; ignoring `cacheLocation` and using `cache`."
+        'Both `cache` and `cacheLocation` options have been specified in the Auth0Client configuration; ignoring `cacheLocation` and using `cache`.'
       );
     }
 
     let cache: ICache;
 
-    if(options.cache) {
+    if (options.cache) {
       cache = options.cache;
 
       this.cacheLocation = CACHE_LOCATION_MEMORY;
@@ -91,12 +104,21 @@ export default class Auth0Client {
 
       const factory = cacheFactory(this.cacheLocation);
 
-      if(!factory) {
+      if (!factory) {
         throw new Error(`Invalid cache location "${this.cacheLocation}"`);
       }
 
       cache = factory();
     }
+
+    const transactionStorage = new InMemoryStorage();
+
+    this.transactionManager = new TransactionManager(
+      transactionStorage,
+      this.options.client_id
+    );
+
+    this.messenger = new Messenger();
 
     this.scope = this.options.scope;
 
@@ -107,27 +129,87 @@ export default class Auth0Client {
       !cache.allKeys
         ? new CacheKeyManifest(cache, this.options.client_id)
         : null,
-      this.nowProvider,
+      this.nowProvider
     );
 
     this.domainUrl = getDomain(this.options.domain);
     this.tokenIssuer = getTokenIssuer(this.options.issuer, this.domainUrl);
 
     this.defaultScope = getUniqueScopes(
-      "openid",
-      this.options?.advancedOptions?.defaultScope || DEFAULT_SCOPE,
+      'openid',
+      this.options?.advancedOptions?.defaultScope !== undefined
+        ? this.options.advancedOptions.defaultScope
+        : DEFAULT_SCOPE
     );
 
-    if(this.options.useRefreshTokens) {
+    if (this.options.useRefreshTokens) {
       // TODO: Add support for refresh tokens
     }
 
     this.customOptions = getCustomInitialOptions(options);
+
+    this.messenger.addMessageListener((message, sender) => {
+      switch (message.type) {
+        case 'auth-result':
+          if (sender.tab?.id) {
+            this.messenger.sendTabMessage(sender.tab.id, {
+              type: 'auth-cleanup',
+            });
+          }
+
+          if (this.options.debug) {
+            console.log(
+              '[auth0-web-extension] Received authentication result back, cleaning up...'
+            );
+          }
+
+          this._handleAuthorizeResponse(message.payload);
+          break;
+
+        case 'auth-error': {
+          const transaction = this.transactionManager.get();
+
+          if (transaction) {
+            transaction.errorCallback(message.error);
+          }
+
+          if (sender.tab?.id) {
+            this.messenger.sendTabMessage(sender.tab.id, {
+              type: 'auth-cleanup',
+            });
+          }
+
+          break;
+        }
+
+        case 'auth-params': {
+          const transaction = this.transactionManager.get();
+
+          if (this.options.debug) {
+            console.log(
+              '[auth0-web-extension] Sending authorize url to content script'
+            );
+          }
+
+          if (transaction) {
+            return {
+              authorizeUrl: transaction.authorizeUrl,
+              domainUrl: transaction.domainUrl,
+            };
+          }
+
+          break;
+        }
+
+        default:
+          throw new Error(`Invalid message type ${message.type}`);
+      }
+    });
   }
 
   private _url(path: string) {
     // TODO: Not sure if we should include the auth0Client param or not?
-    return `${this.domainUrl}${path}`
+    return `${this.domainUrl}${path}`;
   }
 
   private _getParams(
@@ -135,7 +217,7 @@ export default class Auth0Client {
     state: string,
     nonce: string,
     code_challenge: string,
-    redirect_uri: string | undefined,
+    redirect_uri: string | undefined
   ): AuthorizeOptions {
     // These options should be excluded from the authorize URL,
     // as they"re options for the client and not for the IdP.
@@ -165,13 +247,13 @@ export default class Auth0Client {
         this.scope,
         authorizeOptions.scope
       ),
-      response_type: "code",
-      response_mode: "query",
+      response_type: 'code',
+      response_mode: 'query',
       state,
       nonce,
       redirect_uri: redirect_uri || this.options.redirect_uri,
       code_challenge,
-      code_challenge_method: "S256"
+      code_challenge_method: 'S256',
     };
   }
 
@@ -196,13 +278,21 @@ export default class Auth0Client {
   public async getUser<TUser extends User>(
     options: GetUserOptions = {}
   ): Promise<TUser | undefined> {
-    const audience = options.audience || this.options.audience || "default";
+    if (this.options.debug) console.log('[auth0-web-extension] - getUser');
+
+    const audience = options.audience || this.options.audience || 'default';
     const scope = getUniqueScopes(this.defaultScope, this.scope, options.scope);
+
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - checking session');
 
     await this.checkSession({
       audience,
       scope,
     });
+
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - looking for cached auth token');
 
     const cache = await this.cacheManager.get(
       new CacheKey({
@@ -231,13 +321,19 @@ export default class Auth0Client {
   public async getIdTokenClaims(
     options: GetIdTokenClaimsOptions = {}
   ): Promise<IdToken | undefined> {
-    const audience = options.audience || this.options.audience || "default";
+    const audience = options.audience || this.options.audience || 'default';
     const scope = getUniqueScopes(this.defaultScope, this.scope, options.scope);
+
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - checking session');
 
     await this.checkSession({
       audience,
       scope,
     });
+
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - looking for cached auth token');
 
     const cache = await this.cacheManager.get(
       new CacheKey({
@@ -250,6 +346,228 @@ export default class Auth0Client {
     return cache?.decodedToken?.claims;
   }
 
+  public async loginWithNewTab<TAppState = any>(
+    options: RedirectLoginOptions<TAppState> = {}
+  ) {
+    const { redirect_uri, appState, ...authorizeOptions } = options;
+
+    const stateIn = encode(createSecureRandomString());
+    const nonceIn = encode(createSecureRandomString());
+    const codeVerifier = createSecureRandomString();
+    const codeChallengeBuffer = await sha256(codeVerifier);
+    const codeChallenge = bufferToBase64UrlEncoded(codeChallengeBuffer);
+    const fragment = options.fragment ? `#${options.fragment}` : '';
+
+    const params = this._getParams(
+      authorizeOptions,
+      stateIn,
+      nonceIn,
+      codeChallenge,
+      redirect_uri
+    );
+
+    const url = this._authorizeUrl(params);
+    const authorizeUrl = url + fragment;
+
+    if (
+      await retryPromise(
+        () => lock.acquireLock(GET_TOKEN_SILENTLY_LOCK_KEY, 5000),
+        10
+      )
+    ) {
+      try {
+        const result = await new Promise<GetTokenSilentlyResult>(
+          async (resolve, reject) => {
+            this.transactionManager.create({
+              authorizeUrl,
+              domainUrl: this.domainUrl,
+              nonce: nonceIn,
+              code_verifier: codeVerifier,
+              appState,
+              scope: params.scope,
+              audience: params.audience || 'default',
+              redirect_uri: params.redirect_uri,
+              state: stateIn,
+              callback: resolve,
+              errorCallback: reject,
+            });
+
+            await browser.tabs.create({ url });
+          }
+        );
+
+        return result;
+      } finally {
+        await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
+
+        if (this.options.debug)
+          console.log('[auth0-web-extension] - lock released');
+      }
+    } else {
+      throw new TimeoutError();
+    }
+  }
+
+  public async loginWithPopup(
+    options?: PopupLoginOptions,
+    config?: PopupConfigOptions
+  ) {
+    options = options || {};
+    config = config || {};
+
+    const { ...authorizeOptions } = options;
+    const stateIn = encode(createSecureRandomString());
+    const nonceIn = encode(createSecureRandomString());
+    const codeVerifier = createSecureRandomString();
+    const codeChallengeBuffer = await sha256(codeVerifier);
+    const codeChallenge = bufferToBase64UrlEncoded(codeChallengeBuffer);
+
+    const params = this._getParams(
+      authorizeOptions,
+      stateIn,
+      nonceIn,
+      codeChallenge,
+      this.options.redirect_uri
+    );
+
+    const url = this._authorizeUrl({
+      ...params,
+      response_mode: 'query',
+    });
+
+    const width = 400;
+    const height = 600;
+
+    if (
+      await retryPromise(
+        () => lock.acquireLock(GET_TOKEN_SILENTLY_LOCK_KEY, 5000),
+        10
+      )
+    ) {
+      try {
+        return new Promise<GetTokenSilentlyResult>(async (resolve, reject) => {
+          const popup = await browser.windows.create({
+            width,
+            height,
+            type: 'popup',
+            url,
+          });
+
+          const removeWindow =
+            (func: (...args: any[]) => void) =>
+            (...args: any[]) => {
+              if (popup.id) {
+                browser.windows.remove(popup.id);
+              }
+
+              func(args);
+            };
+
+          this.transactionManager.create({
+            authorizeUrl: url,
+            domainUrl: this.domainUrl,
+            nonce: nonceIn,
+            code_verifier: codeVerifier,
+            scope: params.scope,
+            audience: params.audience || 'default',
+            redirect_uri: params.redirect_uri,
+            state: stateIn,
+            callback: removeWindow(resolve),
+            errorCallback: removeWindow(reject),
+          });
+        });
+      } finally {
+        await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
+
+        if (this.options.debug)
+          console.log('[auth0-web-extension] - lock released');
+      }
+    } else {
+      throw new TimeoutError();
+    }
+  }
+
+  private async _handleAuthorizeResponse(authResult: AuthenticationResult) {
+    const { error = '', error_description = '', state, code } = authResult;
+
+    const transaction = this.transactionManager.get();
+
+    if (!transaction) {
+      throw new Error('Invalid state');
+    }
+
+    this.transactionManager.remove();
+
+    if (this.options.debug) {
+      console.log('[auth0-web-extension] Unregistering current transaction');
+    }
+
+    if (authResult.error) {
+      throw new AuthenticationError(
+        error,
+        error_description,
+        authResult.state,
+        transaction.appState
+      );
+    }
+
+    if (
+      !transaction.code_verifier ||
+      (transaction.state && transaction.state !== state)
+    ) {
+      throw new Error('Invalid state');
+    }
+
+    const tokenResult = await oauthToken({
+      ...this.customOptions,
+      audience: transaction.audience,
+      scope: transaction.scope,
+      redirect_uri: transaction.redirect_uri || this.options.redirect_uri,
+      baseUrl: this.domainUrl,
+      client_id: this.options.client_id,
+      code_verifier: transaction.code_verifier,
+      grant_type: 'authorization_code',
+      code,
+      useFormData: this.options.useFormData,
+    });
+
+    if (this.options.debug) {
+      console.log(
+        '[auth0-web-extension] Received token using code and verifier'
+      );
+    }
+
+    const decodedToken = await this._verifyIdToken(
+      tokenResult.id_token,
+      transaction.nonce
+    );
+
+    await this.cacheManager.set({
+      ...tokenResult,
+      decodedToken,
+      audience: transaction.audience,
+      scope: transaction.scope,
+      ...(tokenResult.scope ? { oauthTokenScope: tokenResult.scope } : null),
+      client_id: this.options.client_id,
+    });
+
+    if (this.options.debug) {
+      console.log('[auth0-web-extension] Stored token in cache');
+    }
+
+    transaction.callback({
+      ...tokenResult,
+      decodedToken,
+      scope: transaction.scope,
+      oauthTokenScope: transaction.scope,
+      audience: transaction.audience,
+    });
+
+    return {
+      appState: transaction.appState,
+    };
+  }
+
   /**
    * ```js
    * const isAuthenticated = await auth0.isAuthenticated();
@@ -260,6 +578,9 @@ export default class Auth0Client {
    *
    */
   public async isAuthenticated() {
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - isAuthenticated');
+
     const user = await this.getUser();
     return Boolean(user);
   }
@@ -269,8 +590,8 @@ export default class Auth0Client {
 
     try {
       await this.getTokenSilently(options);
-    } catch(error) {
-      if(!RECOVERABLE_ERRORS.includes((error as any).error)) {
+    } catch (error) {
+      if (!RECOVERABLE_ERRORS.includes((error as any).error)) {
         throw error;
       }
     }
@@ -278,11 +599,11 @@ export default class Auth0Client {
 
   public async getTokenSilently(
     options: GetTokenSilentlyOptions & { detailedResponse: true }
-  ): Promise<GetTokenSilentlyVerboseResult>
+  ): Promise<GetTokenSilentlyVerboseResult>;
 
   public async getTokenSilently(
-    options?: GetTokenSilentlyOptions,
-  ): Promise<string>
+    options?: GetTokenSilentlyOptions
+  ): Promise<string>;
 
   /**
    * Fetches a new access token
@@ -294,7 +615,7 @@ export default class Auth0Client {
    * Refresh tokens are currently not supported
    */
   public async getTokenSilently(
-    options: GetTokenSilentlyOptions = {},
+    options: GetTokenSilentlyOptions = {}
   ): Promise<string | GetTokenSilentlyVerboseResult> {
     return singlePromise(
       () =>
@@ -304,61 +625,85 @@ export default class Auth0Client {
           ...options,
           scope: getUniqueScopes(this.defaultScope, this.scope, options.scope),
         }),
-      `${this.options.client_id}::${this.options.audience}::${getUniqueScopes(this.defaultScope, this.scope, options.scope)}`
+      `${this.options.client_id}::${this.options.audience}::${getUniqueScopes(
+        this.defaultScope,
+        this.scope,
+        options.scope
+      )}`
     );
   }
 
   private async _getTokenSilently(
-    options: GetTokenSilentlyOptions = {},
+    options: GetTokenSilentlyOptions = {}
   ): Promise<string | GetTokenSilentlyVerboseResult> {
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - getTokenSilently');
+
     const { ignoreCache, ...getTokenOptions } = options;
 
-    if(!ignoreCache && getTokenOptions.scope) {
+    if (!ignoreCache && getTokenOptions.scope) {
       const entry = await this._getEntryFromCache({
         scope: getTokenOptions.scope,
-        audience: getTokenOptions.audience || "default",
+        audience: getTokenOptions.audience || 'default',
         client_id: this.options.client_id,
         getDetailedEntry: options.detailedResponse,
       });
 
-      if(entry) {
+      if (entry) {
+        if (this.options.debug)
+          console.log('[auth0-web-extension] - cache hit! returning token');
+
         return entry;
       }
+
+      if (this.options.debug)
+        console.log('[auth0-web-extension] - no cache hit, continuing');
     }
 
-    if(
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - waiting for lock');
+
+    if (
       await retryPromise(
         () => lock.acquireLock(GET_TOKEN_SILENTLY_LOCK_KEY, 5000),
         10
       )
     ) {
+      if (this.options.debug)
+        console.log('[auth0-web-extension] - lock acquired!');
+
       try {
-        if(!ignoreCache && getTokenOptions.scope) {
+        if (!ignoreCache && getTokenOptions.scope) {
           const entry = await this._getEntryFromCache({
             scope: getTokenOptions.scope,
-            audience: getTokenOptions.audience || "default",
+            audience: getTokenOptions.audience || 'default',
             client_id: this.options.client_id,
             getDetailedEntry: options.detailedResponse,
           });
 
-          if(entry) {
+          if (entry) {
+            if (this.options.debug)
+              console.log('[auth0-web-extension] - cache hit! returning token');
+
             return entry;
           }
+
+          if (this.options.debug)
+            console.log('[auth0-web-extension] - no hit, continuing');
         }
 
         const authResult = this.options.useRefreshTokens
           ? await this._getTokenUsingRefreshToken(getTokenOptions)
-          : await this._getTokenFromIfFrame(getTokenOptions);
+          : await this._getTokenFromIFrame(getTokenOptions);
 
-        await this.cacheManager.set({
-          client_id: this.options.client_id,
-          ...authResult,
-        })
+        if (this.options.debug)
+          console.log('[auth0-web-extension] - storing auth token in cache');
 
         // TODO: Save to cookies
 
-        if(options.detailedResponse) {
-          const { id_token, access_token, oauthTokenScope, expires_in } = authResult;
+        if (options.detailedResponse) {
+          const { id_token, access_token, oauthTokenScope, expires_in } =
+            authResult;
 
           return {
             id_token,
@@ -369,9 +714,11 @@ export default class Auth0Client {
         }
 
         return authResult.access_token;
-
       } finally {
-        await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY)
+        await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
+
+        if (this.options.debug)
+          console.log('[auth0-web-extension] - lock released');
       }
     } else {
       throw new TimeoutError();
@@ -379,123 +726,80 @@ export default class Auth0Client {
   }
 
   private async _getTokenUsingRefreshToken(
-    options: GetTokenSilentlyOptions,
+    options: GetTokenSilentlyOptions
   ): Promise<GetTokenSilentlyResult> {
     throw "We currently don't support using refresh tokens, set useRefreshTokens to false";
   }
 
-  private async _getTokenFromIfFrame(
-    options: GetTokenSilentlyOptions,
+  private async _getTokenFromIFrame(
+    options: GetTokenSilentlyOptions
   ): Promise<GetTokenSilentlyResult> {
     const stateIn = encode(createSecureRandomString());
     const nonceIn = encode(createSecureRandomString());
-    const code_verifier = createSecureRandomString();
-    const code_challengeBuffer = await sha256(code_verifier);
-    const code_challenge = bufferToBase64UrlEncoded(code_challengeBuffer);
+    const codeVerifier = createSecureRandomString();
+    const codeChallengeBuffer = await sha256(codeVerifier);
+    const codeChallenge = bufferToBase64UrlEncoded(codeChallengeBuffer);
+
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - getTokenFromIFrame');
 
     const params = this._getParams(
       options,
       stateIn,
       nonceIn,
-      code_challenge,
-      options.redirect_uri || this.options.redirect_uri,
+      codeChallenge,
+      options.redirect_uri || this.options.redirect_uri
     );
 
     // TODO: Add support for organizations
 
     const url = this._authorizeUrl({
       ...params,
-      prompt: "none",
-      response_mode: "web_message",
+      prompt: 'none',
+      response_mode: 'web_message',
     });
+
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - built authorize url');
 
     const timeout =
       options.timeoutInSeconds || this.options.authorizeTimeoutInSeconds;
 
     try {
-      const queryOptions = { active: true, currentWindow: true };
-      let [currentTab] = await browser.tabs.query(queryOptions);
+      if (this.options.debug)
+        console.log(
+          '[auth0-web-extension] - checking if current tab has content script running'
+        );
 
-      const { id } = currentTab || {};
-
-      if(!id) {
-        throw "Could not access current tab.";
-      }
-
-      // This will throw if there is not a content script running
-      await browser.tabs.sendMessage(id, "");
-
-      const codeResult: AuthenticationResult = await new Promise((resolve) => {
-        const parentPort = browser.tabs.connect(id, { name: PARENT_PORT_NAME });
-
-        const handler = (childPort: browser.Runtime.Port) => {
-          if(childPort.name === CHILD_PORT_NAME) {
-            childPort.onMessage.addListener(message => {
-              resolve(message);
-
-              childPort.disconnect();
-              parentPort.disconnect();
-
-              browser.runtime.onConnect.removeListener(handler);
-            });
-
-            childPort.postMessage({
-              authorizeUrl: url,
-              domainUrl: this.domainUrl,
-            });
-          }
-        }
-
-        browser.runtime.onConnect.addListener(handler);
-
-        parentPort.postMessage({
-          redirectUri: params.redirect_uri,
-        });
-      });
-
-      if(stateIn !== codeResult.state) {
-        throw new Error("Invalid state");
-      }
-
-      const {
-        scope,
-        redirect_uri,
-        audience,
-        ignoreCache,
-        timeoutInSeconds,
-        detailedResponse,
-        ...customOptions
-      } = options;
-
-      const tokenResult = await oauthToken({
-        ...this.customOptions,
-        ...customOptions,
-        scope,
-        audience,
-        baseUrl: this.domainUrl,
-        client_id: this.options.client_id,
-        code_verifier,
-        code: codeResult.code,
-        grant_type: "authorization_code",
-        redirect_uri: params.redirect_uri,
-        useFormData: this.options.useFormData,
-        auth0Client: {},
-      });
-
-      const decodedToken = await this._verifyIdToken(
-        tokenResult.id_token,
-        nonceIn,
+      const tabId = await retryPromiseOnReject<number | null>(
+        this._getTabId.bind(this),
+        10
       );
 
-      return {
-        ...tokenResult,
-        decodedToken,
-        scope: params.scope,
-        oauthTokenScope: tokenResult.scope as string,
-        audience: params.audience || "default",
-      };
-    } catch(e) {
-      if((e as any).error === "login_required") {
+      if (!tabId) {
+        throw 'Failed to connect to tab too many times';
+      }
+
+      await this.messenger.sendTabMessage(tabId, {
+        type: 'auth-start',
+      });
+
+      return new Promise<GetTokenSilentlyResult>((resolve, reject) => {
+        this.transactionManager.create({
+          authorizeUrl: url,
+          domainUrl: this.domainUrl,
+          nonce: nonceIn,
+          code_verifier: codeVerifier,
+          scope: params.scope,
+          audience: params.audience || 'default',
+          redirect_uri: params.redirect_uri,
+          state: stateIn,
+          callback: resolve,
+          errorCallback: reject,
+        });
+      });
+    } catch (e) {
+      if ((e as any).error === 'login_required') {
         // TODO: Log user out
       }
 
@@ -503,10 +807,46 @@ export default class Auth0Client {
     }
   }
 
+  private async _getTabId(): Promise<number | null> {
+    try {
+      const queryOptions = { active: true, currentWindow: true };
+      let [currentTab] = await browser.tabs.query(queryOptions);
+
+      const { id } = currentTab || {};
+
+      if (this.options.debug)
+        console.log(`[auth0-web-extension] - current tab id ${id}`);
+
+      if (id) {
+        // This will throw if there is not a content script running
+        const resp = await this.messenger.sendTabMessage(id, {
+          type: 'auth-ack',
+        });
+
+        if (this.options.debug)
+          console.log(
+            `[auth0-web-extension] - received response from current tab`
+          );
+
+        if (resp === 'ack') {
+          return id;
+        } else {
+          throw new Error('Received invalid response on acknowledgement');
+        }
+      }
+    } catch (error) {
+      if (this.options.debug) console.log(`[auth0-web-extension] - ${error}`);
+
+      throw error;
+    }
+
+    throw 'Could not access current tab.';
+  }
+
   private async _verifyIdToken(
     id_token: string,
     nonce?: string,
-    organizationId?: string,
+    organizationId?: string
   ) {
     const now = await this.nowProvider();
 
@@ -527,7 +867,9 @@ export default class Auth0Client {
     audience,
     client_id,
     getDetailedEntry = false,
-  }: GetEntryFromCacheOptions): Promise<string | GetTokenSilentlyVerboseResult | undefined> {
+  }: GetEntryFromCacheOptions): Promise<
+    string | GetTokenSilentlyVerboseResult | undefined
+  > {
     const entry = await this.cacheManager.get(
       new CacheKey({
         scope,
@@ -537,11 +879,11 @@ export default class Auth0Client {
       60
     );
 
-    if(entry && entry.access_token) {
-      if(getDetailedEntry) {
+    if (entry && entry.access_token) {
+      if (getDetailedEntry) {
         const { id_token, access_token, oauthTokenScope, expires_in } = entry;
 
-        if(!id_token || !expires_in) {
+        if (!id_token || !expires_in) {
           return undefined;
         }
 
@@ -559,42 +901,36 @@ export default class Auth0Client {
 }
 
 const parseNumber = (value: any): number | undefined => {
-  if(typeof value !== "string") {
+  if (typeof value !== 'string') {
     return value;
   } else {
-    return parseInt(value, 10) || undefined
+    return parseInt(value, 10) || undefined;
   }
-}
+};
 
 const getDomain = (domainUrl: string) => {
-  if(!/^https?:\/\//.test(domainUrl)) {
+  if (!/^https?:\/\//.test(domainUrl)) {
     return `https://${domainUrl}`;
   } else {
     return domainUrl;
   }
-}
+};
 
 const cacheLocationBuilders: Record<string, () => ICache> = {
   [CACHE_LOCATION_MEMORY]: () => new InMemoryCache().enclosedCache,
-}
+};
 
 const cacheFactory = (location: string) => {
   return cacheLocationBuilders[location];
-}
+};
 
 const getTokenIssuer = (issuer: string | undefined, domainUrl: string) => {
-  if(issuer) {
-    return issuer.startsWith("https://") ? issuer : `https://${issuer}/`;
+  if (issuer) {
+    return issuer.startsWith('https://') ? issuer : `https://${issuer}/`;
   } else {
     return `${domainUrl}/`;
   }
-}
-
-const dedupe = (arr: string[]) => Array.from(new Set(arr));
-
-const getUniqueScopes = (...scopes: (string | undefined)[]) => {
-  return dedupe(scopes.filter(Boolean).join(" ").trim().split(/\s+/)).join(" ")
-}
+};
 
 const getCustomInitialOptions = (
   options: Auth0ClientOptions
@@ -618,4 +954,4 @@ const getCustomInitialOptions = (
     ...customParams
   } = options;
   return customParams;
-}
+};

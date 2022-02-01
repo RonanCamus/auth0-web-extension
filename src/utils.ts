@@ -1,3 +1,27 @@
+import { AuthenticationResult } from './global';
+
+export const parseQueryResult = (queryString: string): AuthenticationResult => {
+  if (queryString.indexOf('#') > -1) {
+    queryString = queryString.slice(0, queryString.indexOf('#'));
+  }
+
+  const queryParams = queryString.split('&');
+  const parsedQuery: Record<string, any> = {};
+
+  queryParams.forEach(qp => {
+    const [key, val] = qp.split('=');
+    if (key && val) {
+      parsedQuery[key] = decodeURIComponent(val);
+    }
+  });
+
+  if (parsedQuery.expires_in) {
+    parsedQuery.expires_in = parseInt(parsedQuery.expires_in);
+  }
+
+  return parsedQuery as AuthenticationResult;
+};
+
 export const getCrypto = () => {
   // FIXME: window is not accessible in background script
   //ie 11.x uses msCrypto
@@ -12,23 +36,23 @@ export const getCryptoSubtle = () => {
 
 export const createRandomString = (length: number): string => {
   const charset =
-    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_~.";
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_~.';
 
-  let random = "";
+  let random = '';
 
-  for(let i = 0; i < length; i++) {
+  for (let i = 0; i < length; i++) {
     const idx = Math.floor(Math.random() * charset.length);
     random += charset[idx];
   }
 
   return random;
-}
+};
 
 export const createSecureRandomString = () => {
   const charset =
-    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_~.";
+    '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_~.';
 
-  let random = "";
+  let random = '';
 
   const randomValues = Array.from(
     getCrypto().getRandomValues(new Uint8Array(43))
@@ -44,14 +68,14 @@ export const decode = (value: string) => atob(value);
 
 export const createQueryParams = (params: any) => {
   return Object.keys(params)
-    .filter(k => typeof params[k] !== "undefined")
-    .map(k => encodeURIComponent(k) + "=" + encodeURIComponent(params[k]))
-    .join("&");
+    .filter(k => typeof params[k] !== 'undefined')
+    .map(k => encodeURIComponent(k) + '=' + encodeURIComponent(params[k]))
+    .join('&');
 };
 
 export const sha256 = async (s: string) => {
   const digestOp: any = getCryptoSubtle().digest(
-    { name: "SHA-256" },
+    { name: 'SHA-256' },
     new TextEncoder().encode(s)
   );
 
@@ -62,7 +86,7 @@ export const sha256 = async (s: string) => {
   // As a result, the various events need to be handled in the event that we"re
   // working in IE11 (hence the msCrypto check). These events just call resolve
   // or reject depending on their intention.
-  if(false /*(window as any)?.msCrypto*/) {
+  if (false /*window && (window as any)?.msCrypto*/) {
     return new Promise((res, rej) => {
       digestOp.oncomplete = (e: any) => {
         res(e.target.result);
@@ -73,7 +97,7 @@ export const sha256 = async (s: string) => {
       };
 
       digestOp.onabort = () => {
-        rej("The digest operation was aborted");
+        rej('The digest operation was aborted');
       };
     });
   } else {
@@ -82,7 +106,7 @@ export const sha256 = async (s: string) => {
 };
 
 const urlEncodeB64 = (input: string) => {
-  const b64Chars: { [index: string]: string } = { "+": "-", "/": "_", "=": "" };
+  const b64Chars: { [index: string]: string } = { '+': '-', '/': '_', '=': '' };
   return input.replace(/[+/=]/g, (m: string) => b64Chars[m] as string);
 };
 
@@ -90,15 +114,15 @@ const urlEncodeB64 = (input: string) => {
 const decodeB64 = (input: string) =>
   decodeURIComponent(
     decode(input)
-      .split("")
+      .split('')
       .map(c => {
-        return "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2);
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
       })
-      .join("")
+      .join('')
   );
 
 export const urlDecodeB64 = (input: string) =>
-  decodeB64(input.replace(/_/g, "/").replace(/-/g, "+"));
+  decodeB64(input.replace(/_/g, '/').replace(/-/g, '+'));
 
 export const bufferToBase64UrlEncoded = (input: number[] | Uint8Array) => {
   const ie11SafeInput = new Uint8Array(input);
@@ -110,10 +134,10 @@ export const bufferToBase64UrlEncoded = (input: number[] | Uint8Array) => {
 export const validateCrypto = () => {
   if (!getCrypto()) {
     throw new Error(
-      "For security reasons, `window.crypto` is required to run `auth0-web-extension`."
+      'For security reasons, `window.crypto` is required to run `auth0-web-extension`.'
     );
   }
-  if (typeof getCryptoSubtle() === "undefined") {
+  if (typeof getCryptoSubtle() === 'undefined') {
     throw new Error(`
       auth0-web-extension must run on a secure origin.
     `);
