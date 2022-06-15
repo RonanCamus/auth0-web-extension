@@ -74,7 +74,8 @@ export async function handleTokenRequest(
 
           document.body.appendChild(iframe);
           iframe.setAttribute('src', redirectUri);
-          break;
+
+          return Promise.resolve();
 
         case 'auth-cleanup':
           if (debug) {
@@ -84,10 +85,11 @@ export async function handleTokenRequest(
           if (iframe) {
             window.document.body.removeChild(iframe);
           }
-          break;
+
+          return Promise.resolve();
 
         case 'auth-ack':
-          return 'ack';
+          return Promise.resolve('ack');
 
         default:
           throw new Error(`Unexpected message type ${message.type}`);

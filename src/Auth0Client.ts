@@ -48,7 +48,8 @@ import {
   GetUserOptions,
   IdToken,
   GetIdTokenClaimsOptions,
-  RedirectLoginOptions,
+  LoginWithNewTabResult,
+  LoginWithNewTabOptions,
   PopupLoginOptions,
   PopupConfigOptions,
 } from './global';
@@ -150,7 +151,7 @@ export default class Auth0Client {
 
     this.messenger.addMessageListener((message, sender) => {
       switch (message.type) {
-        case 'auth-result':
+        case 'auth-result': {
           if (sender.tab?.id) {
             this.messenger.sendTabMessage(sender.tab.id, {
               type: 'auth-cleanup',
@@ -163,15 +164,17 @@ export default class Auth0Client {
             );
           }
 
-          this._handleAuthorizeResponse(message.payload);
-          break;
+          return new Promise<void>(resolve => {
+            this._handleAuthorizeResponse(message.payload).then(() =>
+              resolve()
+            );
+          });
+        }
 
         case 'auth-error': {
           const transaction = this.transactionManager.get();
 
-          if (transaction) {
-            transaction.errorCallback(message.error);
-          }
+          transaction?.errorCallback(message.error);
 
           if (sender.tab?.id) {
             this.messenger.sendTabMessage(sender.tab.id, {
@@ -179,7 +182,7 @@ export default class Auth0Client {
             });
           }
 
-          break;
+          return Promise.resolve();
         }
 
         case 'auth-params': {
@@ -192,13 +195,13 @@ export default class Auth0Client {
           }
 
           if (transaction) {
-            return {
+            return Promise.resolve({
               authorizeUrl: transaction.authorizeUrl,
               domainUrl: transaction.domainUrl,
-            };
+            });
           }
 
-          break;
+          return Promise.resolve();
         }
 
         default:
@@ -282,6 +285,8 @@ export default class Auth0Client {
 
     const audience = options.audience || this.options.audience || 'default';
     const scope = getUniqueScopes(this.defaultScope, this.scope, options.scope);
+    const timeoutInSeconds =
+      options.timeoutInSeconds || this.options.authorizeTimeoutInSeconds || 60;
 
     if (this.options.debug)
       console.log('[auth0-web-extension] - checking session');
@@ -289,10 +294,8 @@ export default class Auth0Client {
     await this.checkSession({
       audience,
       scope,
+      timeoutInSeconds,
     });
-
-    if (this.options.debug)
-      console.log('[auth0-web-extension] - looking for cached auth token');
 
     const cache = await this.cacheManager.get(
       new CacheKey({
@@ -332,9 +335,6 @@ export default class Auth0Client {
       scope,
     });
 
-    if (this.options.debug)
-      console.log('[auth0-web-extension] - looking for cached auth token');
-
     const cache = await this.cacheManager.get(
       new CacheKey({
         client_id: this.options.client_id,
@@ -346,9 +346,9 @@ export default class Auth0Client {
     return cache?.decodedToken?.claims;
   }
 
-  public async loginWithNewTab<TAppState = any>(
-    options: RedirectLoginOptions<TAppState> = {}
-  ) {
+  public async loginWithNewTab(
+    options: LoginWithNewTabOptions = {}
+  ): Promise<void> {
     const { redirect_uri, appState, ...authorizeOptions } = options;
 
     const stateIn = encode(createSecureRandomString());
@@ -376,27 +376,23 @@ export default class Auth0Client {
       )
     ) {
       try {
-        const result = await new Promise<GetTokenSilentlyResult>(
-          async (resolve, reject) => {
-            this.transactionManager.create({
-              authorizeUrl,
-              domainUrl: this.domainUrl,
-              nonce: nonceIn,
-              code_verifier: codeVerifier,
-              appState,
-              scope: params.scope,
-              audience: params.audience || 'default',
-              redirect_uri: params.redirect_uri,
-              state: stateIn,
-              callback: resolve,
-              errorCallback: reject,
-            });
+        await new Promise(async (resolve, reject) => {
+          this.transactionManager.create({
+            authorizeUrl,
+            domainUrl: this.domainUrl,
+            nonce: nonceIn,
+            code_verifier: codeVerifier,
+            appState,
+            scope: params.scope,
+            audience: params.audience || 'default',
+            redirect_uri: params.redirect_uri,
+            state: stateIn,
+            callback: resolve,
+            errorCallback: reject,
+          });
 
-            await browser.tabs.create({ url });
-          }
-        );
-
-        return result;
+          await browser.tabs.create({ url });
+        });
       } finally {
         await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
 
@@ -487,85 +483,88 @@ export default class Auth0Client {
     }
   }
 
-  private async _handleAuthorizeResponse(authResult: AuthenticationResult) {
-    const { error = '', error_description = '', state, code } = authResult;
+  private async _handleAuthorizeResponse(
+    authResult: AuthenticationResult
+  ): Promise<void> {
+    try {
+      const { error = '', error_description = '', state, code } = authResult;
 
-    const transaction = this.transactionManager.get();
+      const transaction = this.transactionManager.get();
 
-    if (!transaction) {
-      throw new Error('Invalid state');
-    }
+      if (!transaction) {
+        throw new Error('Invalid state');
+      }
 
-    this.transactionManager.remove();
+      if (this.options.debug) {
+        console.log('[auth0-web-extension] Unregistering current transaction');
+      }
 
-    if (this.options.debug) {
-      console.log('[auth0-web-extension] Unregistering current transaction');
-    }
+      if (authResult.error) {
+        throw new AuthenticationError(
+          error,
+          error_description,
+          authResult.state,
+          transaction.appState
+        );
+      }
 
-    if (authResult.error) {
-      throw new AuthenticationError(
-        error,
-        error_description,
-        authResult.state,
-        transaction.appState
+      if (
+        !transaction.code_verifier ||
+        (transaction.state && transaction.state !== state)
+      ) {
+        throw new Error('Invalid state');
+      }
+
+      const tokenResult = await oauthToken({
+        ...this.customOptions,
+        audience: transaction.audience,
+        scope: transaction.scope,
+        redirect_uri: transaction.redirect_uri || this.options.redirect_uri,
+        baseUrl: this.domainUrl,
+        client_id: this.options.client_id,
+        code_verifier: transaction.code_verifier,
+        grant_type: 'authorization_code',
+        code,
+        useFormData: this.options.useFormData,
+      });
+
+      if (this.options.debug) {
+        console.log(
+          '[auth0-web-extension] Received token using code and verifier'
+        );
+      }
+
+      const decodedToken = await this._verifyIdToken(
+        tokenResult.id_token,
+        transaction.nonce
       );
+
+      await this.cacheManager.set({
+        ...tokenResult,
+        decodedToken,
+        audience: transaction.audience,
+        scope: transaction.scope,
+        ...(tokenResult.scope ? { oauthTokenScope: tokenResult.scope } : null),
+        client_id: this.options.client_id,
+      });
+
+      if (this.options.debug) {
+        console.log('[auth0-web-extension] Stored token in cache');
+      }
+
+      transaction.callback({
+        ...tokenResult,
+        decodedToken,
+        scope: transaction.scope,
+        oauthTokenScope: transaction.scope,
+        audience: transaction.audience,
+      });
+    } catch (error) {
+      const transaction = this.transactionManager.get();
+      transaction?.errorCallback(error);
+    } finally {
+      this.transactionManager.remove();
     }
-
-    if (
-      !transaction.code_verifier ||
-      (transaction.state && transaction.state !== state)
-    ) {
-      throw new Error('Invalid state');
-    }
-
-    const tokenResult = await oauthToken({
-      ...this.customOptions,
-      audience: transaction.audience,
-      scope: transaction.scope,
-      redirect_uri: transaction.redirect_uri || this.options.redirect_uri,
-      baseUrl: this.domainUrl,
-      client_id: this.options.client_id,
-      code_verifier: transaction.code_verifier,
-      grant_type: 'authorization_code',
-      code,
-      useFormData: this.options.useFormData,
-    });
-
-    if (this.options.debug) {
-      console.log(
-        '[auth0-web-extension] Received token using code and verifier'
-      );
-    }
-
-    const decodedToken = await this._verifyIdToken(
-      tokenResult.id_token,
-      transaction.nonce
-    );
-
-    await this.cacheManager.set({
-      ...tokenResult,
-      decodedToken,
-      audience: transaction.audience,
-      scope: transaction.scope,
-      ...(tokenResult.scope ? { oauthTokenScope: tokenResult.scope } : null),
-      client_id: this.options.client_id,
-    });
-
-    if (this.options.debug) {
-      console.log('[auth0-web-extension] Stored token in cache');
-    }
-
-    transaction.callback({
-      ...tokenResult,
-      decodedToken,
-      scope: transaction.scope,
-      oauthTokenScope: transaction.scope,
-      audience: transaction.audience,
-    });
-
-    return {
-      appState: transaction.appState,
-    };
   }
 
   /**
@@ -692,12 +691,21 @@ export default class Auth0Client {
             console.log('[auth0-web-extension] - no hit, continuing');
         }
 
-        const authResult = this.options.useRefreshTokens
-          ? await this._getTokenUsingRefreshToken(getTokenOptions)
-          : await this._getTokenFromIFrame(getTokenOptions);
+        const timeout =
+          options.timeoutInSeconds ||
+          this.options.authorizeTimeoutInSeconds ||
+          60;
 
-        if (this.options.debug)
-          console.log('[auth0-web-extension] - storing auth token in cache');
+        const rejectOnTimeout = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new TimeoutError()), timeout * 1000);
+        });
+
+        const authResult = await Promise.race([
+          this.options.useRefreshTokens
+            ? await this._getTokenUsingRefreshToken(getTokenOptions)
+            : await this._getTokenFromIFrame(getTokenOptions),
+          rejectOnTimeout,
+        ]);
 
         // TODO: Save to cookies
 
@@ -761,9 +769,6 @@ export default class Auth0Client {
 
     if (this.options.debug)
       console.log('[auth0-web-extension] - built authorize url');
-
-    const timeout =
-      options.timeoutInSeconds || this.options.authorizeTimeoutInSeconds;
 
     try {
       if (this.options.debug)
