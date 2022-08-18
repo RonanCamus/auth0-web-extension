@@ -133,6 +133,12 @@ export default class Auth0Client {
       this.nowProvider
     );
 
+    if (this.options.debug) {
+      console.log(
+        '[auth0-web-extension] - Auth0Client constructor, getting domainUrl'
+      );
+    }
+
     this.domainUrl = getDomain(this.options.domain);
     this.tokenIssuer = getTokenIssuer(this.options.issuer, this.domainUrl);
 
@@ -149,7 +155,15 @@ export default class Auth0Client {
 
     this.customOptions = getCustomInitialOptions(options);
 
+    if (this.options.debug) {
+      console.log('[auth0-web-extension] - Ading message listener to this');
+    }
+
     this.messenger.addMessageListener((message, sender) => {
+      if (this.options.debug) {
+        console.log('[auth0-web-extension] - Message recieved', message);
+      }
+
       switch (message.type) {
         case 'auth-result': {
           if (sender.tab?.id) {
