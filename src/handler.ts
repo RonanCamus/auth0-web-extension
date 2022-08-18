@@ -60,7 +60,9 @@ export async function handleTokenRequest(
     }
   } else {
     console.log(
-      '[auth0-web-extension] redirectUri is not the same as the origin'
+      '[auth0-web-extension] redirectUri is not the same as the origin',
+      redirectUri,
+      window.location.origin
     );
     let iframe: HTMLIFrameElement;
 
