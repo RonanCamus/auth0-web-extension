@@ -89,9 +89,15 @@ export async function handleTokenRequest(
           return Promise.resolve();
 
         case 'auth-ack':
+          if (debug) {
+            console.log('[auth0-web-extension] Received ack');
+          }
           return Promise.resolve('ack');
 
         default:
+          if (debug) {
+            console.log('[auth0-web-extension] Unknown message', message);
+          }
           throw new Error(`Unexpected message type ${message.type}`);
       }
     });

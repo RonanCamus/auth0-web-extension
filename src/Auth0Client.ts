@@ -830,13 +830,20 @@ export default class Auth0Client {
 
         if (this.options.debug)
           console.log(
-            `[auth0-web-extension] - received response from current tab`
+            `[auth0-web-extension] - received response from current tab`,
+            resp
           );
 
         if (resp === 'ack') {
           return id;
         } else {
           throw new Error('Received invalid response on acknowledgement');
+        }
+      } else {
+        if (this.options.debug) {
+          console.log(
+            `[auth0-web-extension] - no current tab, waiting for one`
+          );
         }
       }
     } catch (error) {
