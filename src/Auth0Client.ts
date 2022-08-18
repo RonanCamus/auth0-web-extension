@@ -714,6 +714,10 @@ export default class Auth0Client {
           setTimeout(() => reject(new TimeoutError()), timeout * 1000);
         });
 
+        if (this.options.debug) {
+          console.log('[auth0-web-extension] - checking auth');
+        }
+
         const authResult = await Promise.race([
           this.options.useRefreshTokens
             ? await this._getTokenUsingRefreshToken(getTokenOptions)
@@ -721,9 +725,17 @@ export default class Auth0Client {
           rejectOnTimeout,
         ]);
 
+        if (this.options.debug) {
+          console.log('[auth0-web-extension] - authResult', authResult);
+        }
+
         // TODO: Save to cookies
 
         if (options.detailedResponse) {
+          if (this.options.debug) {
+            console.log('[auth0-web-extension] - giving detailed response');
+          }
+
           const { id_token, access_token, oauthTokenScope, expires_in } =
             authResult;
 
@@ -737,12 +749,20 @@ export default class Auth0Client {
 
         return authResult.access_token;
       } finally {
+        if (this.options.debug) {
+          console.log('[auth0-web-extension] - releasing lock');
+        }
+
         await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
 
         if (this.options.debug)
           console.log('[auth0-web-extension] - lock released');
       }
     } else {
+      if (this.options.debug) {
+        console.log('[auth0-web-extension] - timed out get token silently');
+      }
+
       throw new TimeoutError();
     }
   }
