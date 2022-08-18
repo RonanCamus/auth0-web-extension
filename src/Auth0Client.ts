@@ -222,6 +222,9 @@ export default class Auth0Client {
           throw new Error(`Invalid message type ${message.type}`);
       }
     });
+    if (this.options.debug) {
+      console.log('[auth0-web-extension] - finished adding message listener');
+    }
   }
 
   private _url(path: string) {
