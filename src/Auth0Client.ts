@@ -803,6 +803,12 @@ export default class Auth0Client {
         type: 'auth-start',
       });
 
+      if (this.options.debug) {
+        console.log(
+          '[auth0-web-extension] - sent auth-start message to content script'
+        );
+      }
+
       return new Promise<GetTokenSilentlyResult>((resolve, reject) => {
         this.transactionManager.create({
           authorizeUrl: url,
@@ -828,6 +834,9 @@ export default class Auth0Client {
 
   private async _getTabId(): Promise<number | null> {
     try {
+      if (this.options.debug)
+        console.log(`[auth0-web-extension] - checking current tab id`);
+
       const queryOptions = { active: true, currentWindow: true };
       let [currentTab] = await browser.tabs.query(queryOptions);
 
