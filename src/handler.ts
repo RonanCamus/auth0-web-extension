@@ -15,7 +15,11 @@ export async function handleTokenRequest(
 
   const { debug = false } = options || {};
 
-  if (window.location.origin === redirectUri) {
+  if (
+    window.location.origin +
+      (window.location.pathname?.length > 1 ? window.location.pathname : '') ===
+    redirectUri
+  ) {
     console.log('[auth0-web-extension] redirectUri is the same as the origin');
     if (
       window.location.search.includes('code=') &&
