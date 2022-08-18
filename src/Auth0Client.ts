@@ -914,6 +914,7 @@ const parseNumber = (value: any): number | undefined => {
 };
 
 const getDomain = (domainUrl: string) => {
+  console.log('testing ', domainUrl);
   if (!/^https?:\/\//.test(domainUrl)) {
     return `https://${domainUrl}`;
   } else {
