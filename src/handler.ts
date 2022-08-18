@@ -63,7 +63,7 @@ export async function handleTokenRequest(
       switch (message.type) {
         case 'auth-start':
           if (debug) {
-            console.log('[auth0-web-extension] Create redirect uri IFrame');
+            console.log('[auth0-web-extension] Create redirect uri IFrame, v1');
           }
 
           iframe = document.createElement('iframe');
