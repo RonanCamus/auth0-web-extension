@@ -10,7 +10,6 @@ export async function handleTokenRequest(
   redirectUri: string,
   options?: { debug: boolean }
 ) {
-  console.log('[auth0-web-extension] handling token request');
   const messenger = new Messenger();
 
   const { debug = false } = options || {};
@@ -20,7 +19,6 @@ export async function handleTokenRequest(
       (window.location.pathname?.length > 1 ? window.location.pathname : '') ===
     redirectUri
   ) {
-    console.log('[auth0-web-extension] redirectUri is the same as the origin');
     if (
       window.location.search.includes('code=') &&
       window.location.search.includes('state=')
@@ -63,11 +61,6 @@ export async function handleTokenRequest(
       }
     }
   } else {
-    console.log(
-      '[auth0-web-extension] redirectUri is not the same as the origin',
-      redirectUri,
-      window.location.origin
-    );
     let iframe: HTMLIFrameElement;
 
     messenger.addMessageListener(message => {
