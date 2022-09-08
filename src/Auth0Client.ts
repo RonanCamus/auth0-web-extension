@@ -84,7 +84,8 @@ export default class Auth0Client {
   cacheLocation: CacheLocation;
 
   constructor(private options: Auth0ClientOptions) {
-    if (this.options.debug) console.log('[auth0-web-extension] - constructor');
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - constructor123');
 
     validateCrypto();
 
