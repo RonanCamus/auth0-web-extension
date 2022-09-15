@@ -148,7 +148,6 @@ const runIFrame = async (
     iframe.setAttribute('width', '0');
     iframe.setAttribute('height', '0');
     iframe.style.display = 'none';
-    iframe.id = 'TEST-123';
 
     if (debug) console.log('[auth0-web-extension] created authorize iframe');
 
