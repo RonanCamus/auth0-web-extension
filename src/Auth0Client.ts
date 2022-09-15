@@ -650,7 +650,8 @@ export default class Auth0Client {
         this.defaultScope,
         this.scope,
         options.scope
-      )}`
+      )}`,
+      true
     );
   }
 
