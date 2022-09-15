@@ -84,8 +84,7 @@ export default class Auth0Client {
   cacheLocation: CacheLocation;
 
   constructor(private options: Auth0ClientOptions) {
-    if (this.options.debug)
-      console.log('[auth0-web-extension] - constructor123');
+    if (this.options.debug) console.log('[auth0-web-extension] - constructor');
 
     validateCrypto();
 
@@ -636,6 +635,8 @@ export default class Auth0Client {
   public async getTokenSilently(
     options: GetTokenSilentlyOptions = {}
   ): Promise<string | GetTokenSilentlyVerboseResult> {
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - prepare getTokenSilently');
     return singlePromise(
       () =>
         this._getTokenSilently({
