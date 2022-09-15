@@ -206,7 +206,8 @@ export default class Auth0Client {
 
           if (this.options.debug) {
             console.log(
-              '[auth0-web-extension] Sending authorize url to content script'
+              '[auth0-web-extension] Sending authorize url to content script: ',
+              transaction
             );
           }
 
