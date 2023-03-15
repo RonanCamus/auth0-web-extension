@@ -84,6 +84,8 @@ export default class Auth0Client {
   cacheLocation: CacheLocation;
 
   constructor(private options: Auth0ClientOptions) {
+    if (this.options.debug) console.log('[auth0-web-extension] - constructor');
+
     validateCrypto();
 
     // TODO: find a way to validate we are running in a background script
@@ -133,6 +135,12 @@ export default class Auth0Client {
       this.nowProvider
     );
 
+    if (this.options.debug) {
+      console.log(
+        '[auth0-web-extension] - Auth0Client constructor, getting domainUrl'
+      );
+    }
+
     this.domainUrl = getDomain(this.options.domain);
     this.tokenIssuer = getTokenIssuer(this.options.issuer, this.domainUrl);
 
@@ -149,7 +157,15 @@ export default class Auth0Client {
 
     this.customOptions = getCustomInitialOptions(options);
 
+    if (this.options.debug) {
+      console.log('[auth0-web-extension] - Ading message listener to this');
+    }
+
     this.messenger.addMessageListener((message, sender) => {
+      if (this.options.debug) {
+        console.log('[auth0-web-extension] - Message recieved', message);
+      }
+
       switch (message.type) {
         case 'auth-result': {
           if (sender.tab?.id) {
@@ -190,7 +206,8 @@ export default class Auth0Client {
 
           if (this.options.debug) {
             console.log(
-              '[auth0-web-extension] Sending authorize url to content script'
+              '[auth0-web-extension] Sending authorize url to content script: ',
+              transaction
             );
           }
 
@@ -208,6 +225,9 @@ export default class Auth0Client {
           throw new Error(`Invalid message type ${message.type}`);
       }
     });
+    if (this.options.debug) {
+      console.log('[auth0-web-extension] - finished adding message listener');
+    }
   }
 
   private _url(path: string) {
@@ -616,6 +636,8 @@ export default class Auth0Client {
   public async getTokenSilently(
     options: GetTokenSilentlyOptions = {}
   ): Promise<string | GetTokenSilentlyVerboseResult> {
+    if (this.options.debug)
+      console.log('[auth0-web-extension] - prepare getTokenSilently');
     return singlePromise(
       () =>
         this._getTokenSilently({
@@ -628,7 +650,8 @@ export default class Auth0Client {
         this.defaultScope,
         this.scope,
         options.scope
-      )}`
+      )}`,
+      true
     );
   }
 
@@ -700,6 +723,10 @@ export default class Auth0Client {
           setTimeout(() => reject(new TimeoutError()), timeout * 1000);
         });
 
+        if (this.options.debug) {
+          console.log('[auth0-web-extension] - checking auth');
+        }
+
         const authResult = await Promise.race([
           this.options.useRefreshTokens
             ? await this._getTokenUsingRefreshToken(getTokenOptions)
@@ -707,9 +734,17 @@ export default class Auth0Client {
           rejectOnTimeout,
         ]);
 
+        if (this.options.debug) {
+          console.log('[auth0-web-extension] - authResult', authResult);
+        }
+
         // TODO: Save to cookies
 
         if (options.detailedResponse) {
+          if (this.options.debug) {
+            console.log('[auth0-web-extension] - giving detailed response');
+          }
+
           const { id_token, access_token, oauthTokenScope, expires_in } =
             authResult;
 
@@ -723,12 +758,20 @@ export default class Auth0Client {
 
         return authResult.access_token;
       } finally {
+        if (this.options.debug) {
+          console.log('[auth0-web-extension] - releasing lock');
+        }
+
         await lock.releaseLock(GET_TOKEN_SILENTLY_LOCK_KEY);
 
         if (this.options.debug)
           console.log('[auth0-web-extension] - lock released');
       }
     } else {
+      if (this.options.debug) {
+        console.log('[auth0-web-extension] - timed out get token silently');
+      }
+
       throw new TimeoutError();
     }
   }
@@ -789,6 +832,12 @@ export default class Auth0Client {
         type: 'auth-start',
       });
 
+      if (this.options.debug) {
+        console.log(
+          '[auth0-web-extension] - sent auth-start message to content script'
+        );
+      }
+
       return new Promise<GetTokenSilentlyResult>((resolve, reject) => {
         this.transactionManager.create({
           authorizeUrl: url,
@@ -814,6 +863,9 @@ export default class Auth0Client {
 
   private async _getTabId(): Promise<number | null> {
     try {
+      if (this.options.debug)
+        console.log(`[auth0-web-extension] - checking current tab id`);
+
       const queryOptions = { active: true, currentWindow: true };
       let [currentTab] = await browser.tabs.query(queryOptions);
 
@@ -830,13 +882,20 @@ export default class Auth0Client {
 
         if (this.options.debug)
           console.log(
-            `[auth0-web-extension] - received response from current tab`
+            `[auth0-web-extension] - received response from current tab`,
+            resp
           );
 
         if (resp === 'ack') {
           return id;
         } else {
           throw new Error('Received invalid response on acknowledgement');
+        }
+      } else {
+        if (this.options.debug) {
+          console.log(
+            `[auth0-web-extension] - no current tab, waiting for one`
+          );
         }
       }
     } catch (error) {

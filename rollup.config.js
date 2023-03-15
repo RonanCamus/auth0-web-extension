@@ -29,6 +29,7 @@ let bundles = [
     output: {
       file: pkg.module,
       format: 'esm',
+      exports: 'named',
     },
     plugins: [...getPlugins(isProduction)],
   },
@@ -37,6 +38,7 @@ let bundles = [
     output: {
       file: pkg.main,
       format: 'cjs',
+      exports: 'named',
     },
     plugins: [...getPlugins(isProduction)],
   },

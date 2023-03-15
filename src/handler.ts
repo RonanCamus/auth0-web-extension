@@ -14,7 +14,11 @@ export async function handleTokenRequest(
 
   const { debug = false } = options || {};
 
-  if (window.location.origin === redirectUri) {
+  if (
+    window.location.origin +
+      (window.location.pathname?.length > 1 ? window.location.pathname : '') ===
+    redirectUri
+  ) {
     if (
       window.location.search.includes('code=') &&
       window.location.search.includes('state=')
@@ -63,10 +67,35 @@ export async function handleTokenRequest(
       switch (message.type) {
         case 'auth-start':
           if (debug) {
-            console.log('[auth0-web-extension] Create redirect uri IFrame');
+            console.log(
+              '[auth0-web-extension] Create redirect uri IFrame, v1 with redirectUri',
+              redirectUri
+            );
+          }
+
+          const previousIframe = document.getElementById('auth-iframe');
+
+          if (previousIframe) {
+            try {
+              if (debug) {
+                console.log(
+                  '[auth0-web-extension] Removing previous iframe',
+                  redirectUri
+                );
+              }
+              previousIframe.remove();
+            } catch (e) {
+              if (debug) {
+                console.log(
+                  '[auth0-web-extension] Failed to remove previous iframe: ',
+                  previousIframe
+                );
+              }
+            }
           }
 
           iframe = document.createElement('iframe');
+          iframe.id = 'auth-iframe';
 
           iframe.setAttribute('width', '0');
           iframe.setAttribute('height', '0');
@@ -89,9 +118,15 @@ export async function handleTokenRequest(
           return Promise.resolve();
 
         case 'auth-ack':
+          if (debug) {
+            console.log('[auth0-web-extension] Received ack');
+          }
           return Promise.resolve('ack');
 
         default:
+          if (debug) {
+            console.log('[auth0-web-extension] Unknown message', message);
+          }
           throw new Error(`Unexpected message type ${message.type}`);
       }
     });
@@ -104,6 +139,9 @@ const runIFrame = async (
   timeoutInSeconds: number = 60,
   debug: boolean
 ) => {
+  if (debug) {
+    console.log('[auth0-web-extension] runIFrame', authorizeUrl);
+  }
   return new Promise<AuthenticationResult>((res, rej) => {
     const iframe = window.document.createElement('iframe');
 

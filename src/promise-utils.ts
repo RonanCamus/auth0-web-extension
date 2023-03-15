@@ -5,14 +5,24 @@ export const delay = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
-export const singlePromise = <T>(cb: () => Promise<T>, key: string) => {
+export const singlePromise = <T>(
+  cb: () => Promise<T>,
+  key: string,
+  ignoreMap = false
+) => {
+  console.log('[auth0-web-extension] singlePromise() key', key);
   let promise = singlePromiseMap[key];
-  if (!promise) {
+  if (!ignoreMap && !promise) {
+    console.log('[auth0-web-extension] singlePromise() there is no promise');
     promise = cb().finally(() => {
+      console.log('[auth0-web-extension] singlePromise() completing finally');
       delete singlePromiseMap[key];
       promise = undefined;
     });
     singlePromiseMap[key] = promise;
+  } else if (ignoreMap) {
+    // don't rate
+    promise = cb();
   }
   return promise;
 };
